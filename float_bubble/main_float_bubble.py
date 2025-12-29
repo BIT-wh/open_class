@@ -68,8 +68,23 @@ def classify_text(text: str) -> str:
 @app.get("/", response_class=HTMLResponse)
 async def index(): return template_html
 
+@app.get("/check_submitted")
+async def check_submitted(request: Request):
+    client_ip = request.client.host
+    with open(DB_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        has_submitted = any(d['ip'] == client_ip for d in data)
+    return {"submitted": has_submitted}
+
 @app.post("/submit")
-async def submit(request: Request, q1: str = Form(""), q2: str = Form(""), q3: str = Form(""), q4: str = Form("")):
+async def submit(
+    request: Request,
+    student_id: str = Form(""),
+    q1: str = Form(""),
+    q2: str = Form(""),
+    q3: str = Form(""),
+    q4: str = Form("")
+):
     client_ip = request.client.host
     with open(DB_FILE, "r+", encoding="utf-8") as f:
         data = json.load(f)
@@ -78,11 +93,12 @@ async def submit(request: Request, q1: str = Form(""), q2: str = Form(""), q3: s
         for ans in [q1, q2, q3, q4]:
             if ans.strip():
                 data.append({
-                    "ip": client_ip, 
-                    "text": ans, 
-                    "cid": classify_text(ans), 
-                    "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                })
+                "ip": client_ip,
+                "student_id": student_id,
+                "text": ans,
+                "cid": classify_text(ans),
+                "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
                 added = True
         if not added: return {"status": "empty"}
         f.seek(0); json.dump(data, f, ensure_ascii=False, indent=2); f.truncate()
@@ -233,8 +249,62 @@ template_html = """
         <p id="mc" style="line-height:1.6; color:#475569; font-size:14px;"></p>
         <button class="btn" style="padding:10px;" onclick="closeModal()">确定</button>
     </div>
+    
 <script>
     let currentUserRole = "";
+
+    // 打字机效果函数
+    let typingTimer = null;
+    function typeWriter(text, element, speed = 50) {
+        // 清除之前的定时器
+        if (typingTimer) {
+            clearInterval(typingTimer);
+        }
+        
+        element.textContent = '';
+        let index = 0;
+        
+        typingTimer = setInterval(() => {
+            if (index < text.length) {
+                element.textContent += text.charAt(index);
+                index++;
+            } else {
+                clearInterval(typingTimer);
+                typingTimer = null;
+            }
+        }, speed);
+    }
+
+    function doSubmit() {
+        const p = new URLSearchParams();
+
+        const values = ['q1','q2','q3','q4'].map(id => {
+            const v = document.getElementById(id).value;
+            p.append(id, v);
+            return v.trim();
+        });
+
+        if (values.every(v => !v)) {
+            alert("请至少填写一项内容");
+            return;
+        }
+
+        p.append("student_id", sessionStorage.getItem("student_id") || "");
+
+        axios.post('/submit', p).then(res => {
+            if(res.data.status==='success' || res.data.status==='already_submitted'){
+                if(res.data.status==='already_submitted')
+                    alert("该学号已提交过，直接进入查看。");
+
+                document.getElementById('form-view').style.display='none';
+                document.getElementById('bubble-view').style.display='block';
+                setTimeout(() => { initCanvas(); sync(); }, 100);
+            } else {
+                alert("提交失败，请检查输入");
+            }
+        });
+    }
+
 
     function switchTab(role) {
         const isStd = role === 'student';
@@ -245,29 +315,46 @@ template_html = """
     }
 
     function doLogin(role) {
-        const data = { role: role };
-        if (role === 'student') {
-            data.id_code = document.getElementById('std_id').value;
-        } else {
-            data.username = document.getElementById('tch_user').value;
-            data.password = document.getElementById('tch_pwd').value;
-        }
-
-        axios.post('/login_auth', data).then(res => {
-            if (res.data.status === 'success') {
-                currentUserRole = res.data.role;
-                document.getElementById('login-view').style.display = 'none';
-                if (currentUserRole === 'student') {
-                    document.getElementById('form-view').style.display = 'block';
-                    document.getElementById('bubble-view').style.display = 'none';
-                } else {
-                    document.getElementById('form-view').style.display = 'none';
-                    document.getElementById('bubble-view').style.display = 'block';
-                    setTimeout(() => { initCanvas(); sync(); }, 100); 
-                }
-            } else { alert(res.data.msg); }
-        });
+    const data = { role: role };
+    if (role === 'student') {
+        data.id_code = document.getElementById('std_id').value;
+    } else {
+        data.username = document.getElementById('tch_user').value;
+        data.password = document.getElementById('tch_pwd').value;
     }
+
+    axios.post('/login_auth', data).then(res => {
+        if (res.data.status === 'success') {
+            currentUserRole = res.data.role;
+            if (role === 'student') {
+                sessionStorage.setItem("student_id", data.id_code);
+            }
+
+            document.getElementById('login-view').style.display = 'none';
+            
+            if (currentUserRole === 'student') {
+                // 学生登录后检查是否已提交
+                axios.get('/check_submitted').then(checkRes => {
+                    if (checkRes.data.submitted) {
+                        // 已提交，直接跳转到气泡图
+                        document.getElementById('form-view').style.display = 'none';
+                        document.getElementById('bubble-view').style.display = 'block';
+                        setTimeout(() => { initCanvas(); sync(); }, 100);
+                    } else {
+                        // 未提交，显示表单
+                        document.getElementById('form-view').style.display = 'block';
+                        document.getElementById('bubble-view').style.display = 'none';
+                    }
+                });
+            } else {
+                // 教师直接进入气泡图
+                document.getElementById('form-view').style.display = 'none';
+                document.getElementById('bubble-view').style.display = 'block';
+                setTimeout(() => { initCanvas(); sync(); }, 100); 
+            }
+        } else { alert(res.data.msg); }
+    });
+}
 
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
@@ -304,8 +391,10 @@ template_html = """
         }
 
         update() {
+        
             const dist = Math.sqrt((this.x - mx)**2 + (this.y - my)**2);
             this.isHover = dist < this.r;
+            this.targetR = (55 + (this.targetVal * 8)) * (this.isHover ? 1.15 : 1);
             
             if (!this.isHover) { 
                 this.x += this.vx; 
@@ -341,11 +430,12 @@ template_html = """
 
             // --- 1. 动态计算字号 ---
             // 标题字号随半径缩放，并设定最小值确保可读性
-            const titleFontSize = Math.max(12, this.r / 5); 
+            const titleFontSize = Math.max(12, this.targetR / 5);
+
             ctx.font = `bold ${titleFontSize}px "PingFang SC"`;
             
             // 处理文字换行
-            const lines = this.wrap(this.name, this.r * 1.6);
+            const lines = this.wrap(this.name, this.targetR * 1.6);
             
             // --- 2. 计算整体垂直居中偏移 ---
             // 总高度 = 标题行数 * 行高 + 数量行高
@@ -401,18 +491,6 @@ template_html = """
             });
         });
     }
-
-    function doSubmit() {
-        const p = new URLSearchParams();
-        ['q1','q2','q3','q4'].forEach(id => p.append(id, document.getElementById(id).value));
-        axios.post('/submit', p).then(res => {
-            if(res.data.status==='success' || res.data.status==='already_submitted'){
-                document.getElementById('form-view').style.display='none';
-                document.getElementById('bubble-view').style.display='block';
-                setTimeout(() => { initCanvas(); sync(); }, 100);
-            } else alert("请输入内容");
-        });
-    }
     
     function adminResetFlow() {
         if (currentSubmittedCount > 0) {
@@ -452,13 +530,23 @@ template_html = """
         bubbles.forEach(b => {
             if(Math.sqrt((mx-b.x)**2 + (my-b.y)**2) < b.r) {
                 document.getElementById('mt').innerText = b.name;
-                document.getElementById('mc').innerText = b.content;
+                
+                // 使用打字机效果显示内容
+                const contentElement = document.getElementById('mc');
+                typeWriter(b.content, contentElement, 20);
+                
                 document.getElementById('modal').style.display='block';
                 document.getElementById('overlay').style.display='block';
             }
         });
     };
-    function closeModal() { 
+    function closeModal() {
+        // 停止打字机效果
+        if (typingTimer) {
+            clearInterval(typingTimer);
+            typingTimer = null;
+        }
+        
         document.getElementById('modal').style.display='none'; 
         document.getElementById('overlay').style.display='none'; 
     }
