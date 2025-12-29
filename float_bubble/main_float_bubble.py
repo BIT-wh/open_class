@@ -77,7 +77,12 @@ async def submit(request: Request, q1: str = Form(""), q2: str = Form(""), q3: s
         added = False
         for ans in [q1, q2, q3, q4]:
             if ans.strip():
-                data.append({"ip": client_ip, "text": ans, "cid": classify_text(ans), "time": datetime.datetime.now().strftime("%H:%M:%S")})
+                data.append({
+                    "ip": client_ip, 
+                    "text": ans, 
+                    "cid": classify_text(ans), 
+                    "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
                 added = True
         if not added: return {"status": "empty"}
         f.seek(0); json.dump(data, f, ensure_ascii=False, indent=2); f.truncate()
@@ -408,24 +413,34 @@ template_html = """
             } else alert("请输入内容");
         });
     }
-
+    
     function adminResetFlow() {
         if (currentSubmittedCount > 0) {
             const saveConfirm = confirm("检测到已有数据！是否先下载CSV备份？");
-            if (saveConfirm) { adminExport(); return; }
+            if (saveConfirm) { 
+                adminExport(); 
+                return; 
+            }
         }
         const pwd = prompt("管理员密码：");
         if(pwd) {
             axios.get(`/admin/reset?pwd=${pwd}`).then(res => {
-                if(res.data.status==='success') { location.reload(); } 
+                if(res.data.status==='success') { 
+                    alert("重置成功！");
+                    location.reload(); 
+                } 
                 else { alert("密码错误"); }
+            }).catch(err => {
+                alert("重置失败：" + err.message);
             });
         }
     }
 
     function adminExport() {
-        const pwd = prompt("管理员密码");
-        if(pwd) window.location.href = `/admin/export?pwd=${pwd}`;
+        const pwd = prompt("管理员密码：");
+        if(pwd) {
+            window.location.href = `/admin/export?pwd=${pwd}`;
+        }
     }
 
     canvas.onmousemove = e => { 
